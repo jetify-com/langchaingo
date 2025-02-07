@@ -211,11 +211,33 @@ func generateMessagesContent(ctx context.Context, o *LLM, messages []llms.Messag
 func toolsToTools(tools []llms.Tool) []anthropicclient.Tool {
 	toolReq := make([]anthropicclient.Tool, len(tools))
 	for i, tool := range tools {
-		toolReq[i] = anthropicclient.Tool{
+		anthropicTool := anthropicclient.Tool{
 			Name:        tool.Function.Name,
 			Description: tool.Function.Description,
 			InputSchema: tool.Function.Parameters,
+
+			Type: tool.Type,
 		}
+		if tool.Function.ProviderSpecific != nil {
+			if displayHeightPx, ok := tool.Function.ProviderSpecific["display_height_px"]; ok {
+				anthropicTool.DisplayHeightPx = displayHeightPx.(int)
+			}
+			if displayWidthPx, ok := tool.Function.ProviderSpecific["display_width_px"]; ok {
+				anthropicTool.DisplayWidthPx = displayWidthPx.(int)
+			}
+			if displayNumber, ok := tool.Function.ProviderSpecific["display_number"]; ok {
+				anthropicTool.DisplayNumber = displayNumber.(int)
+			}
+			if cacheControl, ok := tool.Function.ProviderSpecific["cache_control"]; ok {
+				anthropicTool.CacheControl = struct {
+					Type string "json:\"type,omitempty\""
+				}{
+					Type: cacheControl.(string),
+				}
+			}
+		}
+
+		toolReq[i] = anthropicTool
 	}
 	return toolReq
 }
@@ -318,6 +340,10 @@ func handleToolMessage(msg llms.MessageContent) (anthropicclient.ChatMessage, er
 			Type:      "tool_result",
 			ToolUseID: toolCallResponse.ToolCallID,
 			Content:   toolCallResponse.Content,
+		}
+
+		if toolCallResponse.MultiContent != nil {
+			toolContent.MultiContent = toolCallResponse.MultiContent
 		}
 
 		return anthropicclient.ChatMessage{
