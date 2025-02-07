@@ -86,6 +86,8 @@ type FunctionDefinition struct {
 	Parameters any `json:"parameters,omitempty"`
 	// Strict is a flag to indicate if the function should be called strictly. Only used for openai llm structured output.
 	Strict bool `json:"strict,omitempty"`
+	// ProviderSpecific is a map of provider specific options.
+	ProviderSpecific map[string]any `json:"provider_specific,omitempty"`
 }
 
 // ToolChoice is a specific tool to use.

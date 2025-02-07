@@ -11,6 +11,8 @@ import (
 	"log"
 	"net/http"
 	"strings"
+
+	"github.com/tmc/langchaingo/llms"
 )
 
 var (
@@ -27,8 +29,8 @@ var (
 )
 
 type ChatMessage struct {
-	Role    string      `json:"role"`
-	Content interface{} `json:"content"`
+	Role    string `json:"role"`
+	Content any    `json:"content"`
 }
 
 type messagePayload struct {
@@ -50,6 +52,16 @@ type Tool struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 	InputSchema any    `json:"input_schema,omitempty"`
+
+	// The fields below are used for the built-in tools:
+	// https://docs.anthropic.com/en/docs/build-with-claude/computer-use#understand-anthropic-defined-tools
+	Type            string `json:"type"`
+	DisplayHeightPx int    `json:"display_height_px,omitempty"`
+	DisplayWidthPx  int    `json:"display_width_px,omitempty"`
+	DisplayNumber   int    `json:"display_number,omitempty"`
+	CacheControl    struct {
+		Type string `json:"type,omitempty"` // valid value: "ephemeral"
+	} `json:"cache_control,omitempty"`
 }
 
 // Content can be TextContent or ToolUseContent depending on the type.
@@ -80,7 +92,46 @@ func (tuc ToolUseContent) GetType() string {
 type ToolResultContent struct {
 	Type      string `json:"type"`
 	ToolUseID string `json:"tool_use_id"`
-	Content   string `json:"content"`
+
+	// The content of the message.
+	// This field is mutually exclusive with MultiContent.
+	Content string `json:"-"`
+
+	MultiContent []llms.ToolResultContentPart `json:"-"`
+}
+
+// json marshal ToolResultContent such that either Content or MultiContent is set, but not both.
+// the json key for both is "content"
+func (trc ToolResultContent) MarshalJSON() ([]byte, error) {
+	if trc.Content != "" && len(trc.MultiContent) > 0 {
+		return nil, fmt.Errorf("both Content and MultiContent cannot be set in ToolResultContents")
+	}
+
+	type alias ToolResultContent
+
+	if len(trc.MultiContent) > 0 {
+		result, err := json.Marshal(struct {
+			alias
+			Content []llms.ToolResultContentPart `json:"content"`
+		}{
+			alias:   (alias)(trc),
+			Content: trc.MultiContent,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("marshal multi content: %w", err)
+		}
+		// fmt.Printf("ToolResultContent json: %s\n", string(result))
+
+		return result, nil
+	}
+
+	return json.Marshal(struct {
+		alias
+		Content string `json:"content"`
+	}{
+		alias:   (alias)(trc),
+		Content: trc.Content,
+	})
 }
 
 func (trc ToolResultContent) GetType() string {

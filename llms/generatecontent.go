@@ -113,7 +113,12 @@ type ToolCallResponse struct {
 	// Name is the name of the tool that was called.
 	Name string `json:"name"`
 	// Content is the textual content of the response.
+	// This field is mutually exclusive with MultiContent.
 	Content string `json:"content"`
+
+	// MultiContent is a list of content parts to use in the response.
+	// This may not be supported by all providers.
+	MultiContent []ToolResultContentPart
 }
 
 func (ToolCallResponse) isPart() {}
@@ -178,10 +183,31 @@ func ShowMessageContents(w io.Writer, msgs []MessageContent) {
 			case ToolCall:
 				fmt.Fprintf(w, "ToolCall ID=%v, Type=%v, Func=%v(%v)\n", pp.ID, pp.Type, pp.FunctionCall.Name, pp.FunctionCall.Arguments)
 			case ToolCallResponse:
-				fmt.Fprintf(w, "ToolCallResponse ID=%v, Name=%v, Content=%v\n", pp.ToolCallID, pp.Name, pp.Content)
+				fmt.Fprintf(w, "ToolCallResponse ID=%v, Name=%v, Content=%v, MultiContent=%v\n", pp.ToolCallID, pp.Name, pp.Content, pp.MultiContent)
 			default:
 				fmt.Fprintf(w, "unknown type %T\n", pp)
 			}
 		}
 	}
+}
+
+type ToolResultContentPart interface {
+	isToolResultContentPart()
+}
+
+type ImageToolContent struct {
+	Type   string             `json:"type"` // always "image"
+	Source ImageSourceContent `json:"source"`
+}
+
+func (ImageToolContent) isToolResultContentPart() {}
+
+type ImageSourceContent struct {
+	Type      string `json:"type"`       // always "base64"
+	MediaType string `json:"media_type"` // mime type, conventionally prefixed with "image/"
+	Data      string `json:"data"`
+}
+
+func (imc ImageSourceContent) String() string {
+	return "data:" + imc.MediaType + ";base64," + imc.Data
 }
