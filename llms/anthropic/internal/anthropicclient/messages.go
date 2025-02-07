@@ -11,6 +11,8 @@ import (
 	"log"
 	"net/http"
 	"strings"
+
+	"github.com/tmc/langchaingo/llms"
 )
 
 var (
@@ -27,14 +29,14 @@ var (
 )
 
 type ChatMessage struct {
-	Role    string      `json:"role"`
-	Content interface{} `json:"content"`
+	Role    string `json:"role"`
+	Content any    `json:"content"` // []Content or string
 }
 
 type messagePayload struct {
 	Model       string        `json:"model"`
 	Messages    []ChatMessage `json:"messages"`
-	System      string        `json:"system,omitempty"`
+	System      any           `json:"system,omitempty"` // string or []TextContent
 	MaxTokens   int           `json:"max_tokens,omitempty"`
 	StopWords   []string      `json:"stop_sequences,omitempty"`
 	Stream      bool          `json:"stream,omitempty"`
@@ -50,16 +52,27 @@ type Tool struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 	InputSchema any    `json:"input_schema,omitempty"`
+
+	// The fields below are used for the built-in tools:
+	// https://docs.anthropic.com/en/docs/build-with-claude/computer-use#understand-anthropic-defined-tools
+	Type            string `json:"type"`
+	DisplayHeightPx int    `json:"display_height_px,omitempty"`
+	DisplayWidthPx  int    `json:"display_width_px,omitempty"`
+	DisplayNumber   int    `json:"display_number,omitempty"`
+	CacheControl    struct {
+		Type string `json:"type,omitempty"` // valid value: "ephemeral"
+	} `json:"cache_control,omitempty"`
 }
 
-// Content can be TextContent or ToolUseContent depending on the type.
+// Content can be TextContent, ToolUseContent, or ToolResultContent depending on the type.
 type Content interface {
 	GetType() string
 }
 
 type TextContent struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+	Type         string            `json:"type"`
+	Text         string            `json:"text"`
+	CacheControl map[string]string `json:"cache_control,omitempty"`
 }
 
 func (tc TextContent) GetType() string {
@@ -67,10 +80,11 @@ func (tc TextContent) GetType() string {
 }
 
 type ToolUseContent struct {
-	Type  string                 `json:"type"`
-	ID    string                 `json:"id"`
-	Name  string                 `json:"name"`
-	Input map[string]interface{} `json:"input"`
+	Type         string                 `json:"type"`
+	ID           string                 `json:"id"`
+	Name         string                 `json:"name"`
+	Input        map[string]interface{} `json:"input"`
+	CacheControl map[string]string      `json:"cache_control,omitempty"`
 }
 
 func (tuc ToolUseContent) GetType() string {
@@ -80,7 +94,49 @@ func (tuc ToolUseContent) GetType() string {
 type ToolResultContent struct {
 	Type      string `json:"type"`
 	ToolUseID string `json:"tool_use_id"`
-	Content   string `json:"content"`
+
+	// The content of the message.
+	// This field is mutually exclusive with MultiContent.
+	Content string `json:"-"`
+
+	MultiContent []llms.ToolResultContentPart `json:"-"`
+	CacheControl map[string]string            `json:"cache_control,omitempty"`
+
+	IsError bool `json:"is_error,omitempty"`
+}
+
+// json marshal ToolResultContent such that either Content or MultiContent is set, but not both.
+// the json key for both is "content"
+func (trc ToolResultContent) MarshalJSON() ([]byte, error) {
+	if trc.Content != "" && len(trc.MultiContent) > 0 {
+		return nil, fmt.Errorf("both Content and MultiContent cannot be set in ToolResultContents")
+	}
+
+	type alias ToolResultContent
+
+	if len(trc.MultiContent) > 0 {
+		result, err := json.Marshal(struct {
+			alias
+			Content []llms.ToolResultContentPart `json:"content"`
+		}{
+			alias:   (alias)(trc),
+			Content: trc.MultiContent,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("marshal multi content: %w", err)
+		}
+		// fmt.Printf("ToolResultContent json: %s\n", string(result))
+
+		return result, nil
+	}
+
+	return json.Marshal(struct {
+		alias
+		Content string `json:"content"`
+	}{
+		alias:   (alias)(trc),
+		Content: trc.Content,
+	})
 }
 
 func (trc ToolResultContent) GetType() string {
@@ -96,8 +152,10 @@ type MessageResponsePayload struct {
 	StopSequence string    `json:"stop_sequence"`
 	Type         string    `json:"type"`
 	Usage        struct {
-		InputTokens  int `json:"input_tokens"`
-		OutputTokens int `json:"output_tokens"`
+		InputTokens              int `json:"input_tokens"`
+		OutputTokens             int `json:"output_tokens"`
+		CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+		CacheReadInputTokens     int `json:"cache_read_input_tokens"`
 	} `json:"usage"`
 }
 
@@ -297,6 +355,7 @@ func handleMessageStartEvent(event map[string]interface{}, response MessageRespo
 	response.Role = getString(message, "role")
 	response.Type = getString(message, "type")
 	response.Usage.InputTokens = int(inputTokens)
+	// TODO: handle cached token usage
 
 	return response, nil
 }
