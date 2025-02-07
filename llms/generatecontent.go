@@ -48,11 +48,14 @@ func ImageURLWithDetailPart(url string, detail string) ImageURLContent {
 // ContentPart is an interface all parts of content have to implement.
 type ContentPart interface {
 	isPart()
+	GetProviderMetadata() map[string]any
+	SetProviderMetadata(map[string]any) ContentPart
 }
 
 // TextContent is content with some text.
 type TextContent struct {
-	Text string
+	Text             string
+	ProviderMetadata map[string]any
 }
 
 func (tc TextContent) String() string {
@@ -61,10 +64,20 @@ func (tc TextContent) String() string {
 
 func (TextContent) isPart() {}
 
+func (tc TextContent) GetProviderMetadata() map[string]any {
+	return tc.ProviderMetadata
+}
+
+func (tc TextContent) SetProviderMetadata(metadata map[string]any) ContentPart {
+	tc.ProviderMetadata = metadata
+	return tc
+}
+
 // ImageURLContent is content with an URL pointing to an image.
 type ImageURLContent struct {
-	URL    string `json:"url"`
-	Detail string `json:"detail,omitempty"` // Detail is the detail of the image, e.g. "low", "high".
+	URL              string `json:"url"`
+	Detail           string `json:"detail,omitempty"` // Detail is the detail of the image, e.g. "low", "high".
+	ProviderMetadata map[string]any
 }
 
 func (iuc ImageURLContent) String() string {
@@ -73,10 +86,20 @@ func (iuc ImageURLContent) String() string {
 
 func (ImageURLContent) isPart() {}
 
+func (iuc ImageURLContent) GetProviderMetadata() map[string]any {
+	return iuc.ProviderMetadata
+}
+
+func (iuc ImageURLContent) SetProviderMetadata(metadata map[string]any) ContentPart {
+	iuc.ProviderMetadata = metadata
+	return iuc
+}
+
 // BinaryContent is content holding some binary data with a MIME type.
 type BinaryContent struct {
-	MIMEType string
-	Data     []byte
+	MIMEType         string
+	Data             []byte
+	ProviderMetadata map[string]any
 }
 
 func (bc BinaryContent) String() string {
@@ -85,6 +108,15 @@ func (bc BinaryContent) String() string {
 }
 
 func (BinaryContent) isPart() {}
+
+func (bc BinaryContent) GetProviderMetadata() map[string]any {
+	return bc.ProviderMetadata
+}
+
+func (bc BinaryContent) SetProviderMetadata(metadata map[string]any) ContentPart {
+	bc.ProviderMetadata = metadata
+	return bc
+}
 
 // FunctionCall is the name and arguments of a function call.
 type FunctionCall struct {
@@ -101,10 +133,20 @@ type ToolCall struct {
 	// Type is the type of the tool call. Typically, this would be "function".
 	Type string `json:"type"`
 	// FunctionCall is the function call to be executed.
-	FunctionCall *FunctionCall `json:"function,omitempty"`
+	FunctionCall     *FunctionCall `json:"function,omitempty"`
+	ProviderMetadata map[string]any
 }
 
 func (ToolCall) isPart() {}
+
+func (tc ToolCall) GetProviderMetadata() map[string]any {
+	return tc.ProviderMetadata
+}
+
+func (tc ToolCall) SetProviderMetadata(metadata map[string]any) ContentPart {
+	tc.ProviderMetadata = metadata
+	return tc
+}
 
 // ToolCallResponse is the response returned by a tool call.
 type ToolCallResponse struct {
@@ -113,10 +155,25 @@ type ToolCallResponse struct {
 	// Name is the name of the tool that was called.
 	Name string `json:"name"`
 	// Content is the textual content of the response.
+	// This field is mutually exclusive with MultiContent.
 	Content string `json:"content"`
+
+	// MultiContent is a list of content parts to use in the response.
+	// This may not be supported by all providers.
+	MultiContent     []ToolResultContentPart
+	ProviderMetadata map[string]any
 }
 
 func (ToolCallResponse) isPart() {}
+
+func (tcr ToolCallResponse) GetProviderMetadata() map[string]any {
+	return tcr.ProviderMetadata
+}
+
+func (tcr ToolCallResponse) SetProviderMetadata(metadata map[string]any) ContentPart {
+	tcr.ProviderMetadata = metadata
+	return tcr
+}
 
 // ContentResponse is the response returned by a GenerateContent call.
 // It can potentially return multiple content choices.
@@ -178,10 +235,31 @@ func ShowMessageContents(w io.Writer, msgs []MessageContent) {
 			case ToolCall:
 				fmt.Fprintf(w, "ToolCall ID=%v, Type=%v, Func=%v(%v)\n", pp.ID, pp.Type, pp.FunctionCall.Name, pp.FunctionCall.Arguments)
 			case ToolCallResponse:
-				fmt.Fprintf(w, "ToolCallResponse ID=%v, Name=%v, Content=%v\n", pp.ToolCallID, pp.Name, pp.Content)
+				fmt.Fprintf(w, "ToolCallResponse ID=%v, Name=%v, Content=%v, MultiContent=%v\n", pp.ToolCallID, pp.Name, pp.Content, pp.MultiContent)
 			default:
 				fmt.Fprintf(w, "unknown type %T\n", pp)
 			}
 		}
 	}
+}
+
+type ToolResultContentPart interface {
+	isToolResultContentPart()
+}
+
+type ImageToolContent struct {
+	Type   string             `json:"type"` // always "image"
+	Source ImageSourceContent `json:"source"`
+}
+
+func (ImageToolContent) isToolResultContentPart() {}
+
+type ImageSourceContent struct {
+	Type      string `json:"type"`       // always "base64"
+	MediaType string `json:"media_type"` // mime type, conventionally prefixed with "image/"
+	Data      string `json:"data"`
+}
+
+func (imc ImageSourceContent) String() string {
+	return "data:" + imc.MediaType + ";base64," + imc.Data
 }
