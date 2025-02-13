@@ -164,9 +164,13 @@ func generateMessagesContent(ctx context.Context, o *LLM, messages []llms.Messag
 				choices[i] = &llms.ContentChoice{
 					Content:    textContent.Text,
 					StopReason: result.StopReason,
+					// TODO: this is not fully accurate. The Usage data covers all the Choices
+					// in the response, not just this Choice.
 					GenerationInfo: map[string]any{
-						"InputTokens":  result.Usage.InputTokens,
-						"OutputTokens": result.Usage.OutputTokens,
+						"InputTokens":              result.Usage.InputTokens,
+						"OutputTokens":             result.Usage.OutputTokens,
+						"CacheCreationInputTokens": result.Usage.CacheCreationInputTokens,
+						"CacheReadInputTokens":     result.Usage.CacheReadInputTokens,
 					},
 				}
 			} else {
@@ -189,9 +193,13 @@ func generateMessagesContent(ctx context.Context, o *LLM, messages []llms.Messag
 						},
 					},
 					StopReason: result.StopReason,
+					// TODO: this is not fully accurate. The Usage data covers all the Choices
+					// in the response, not just this Choice.
 					GenerationInfo: map[string]any{
-						"InputTokens":  result.Usage.InputTokens,
-						"OutputTokens": result.Usage.OutputTokens,
+						"InputTokens":              result.Usage.InputTokens,
+						"OutputTokens":             result.Usage.OutputTokens,
+						"CacheCreationInputTokens": result.Usage.CacheCreationInputTokens,
+						"CacheReadInputTokens":     result.Usage.CacheReadInputTokens,
 					},
 				}
 			} else {
@@ -218,17 +226,17 @@ func toolsToTools(tools []llms.Tool) []anthropicclient.Tool {
 
 			Type: tool.Type,
 		}
-		if tool.Function.ProviderSpecific != nil {
-			if displayHeightPx, ok := tool.Function.ProviderSpecific["display_height_px"]; ok {
+		if tool.Function.ProviderMetadata != nil {
+			if displayHeightPx, ok := tool.Function.ProviderMetadata["display_height_px"]; ok {
 				anthropicTool.DisplayHeightPx = displayHeightPx.(int)
 			}
-			if displayWidthPx, ok := tool.Function.ProviderSpecific["display_width_px"]; ok {
+			if displayWidthPx, ok := tool.Function.ProviderMetadata["display_width_px"]; ok {
 				anthropicTool.DisplayWidthPx = displayWidthPx.(int)
 			}
-			if displayNumber, ok := tool.Function.ProviderSpecific["display_number"]; ok {
+			if displayNumber, ok := tool.Function.ProviderMetadata["display_number"]; ok {
 				anthropicTool.DisplayNumber = displayNumber.(int)
 			}
-			if cacheControl, ok := tool.Function.ProviderSpecific["cache_control"]; ok {
+			if cacheControl, ok := tool.Function.ProviderMetadata["cache_control"]; ok {
 				anthropicTool.CacheControl = struct {
 					Type string "json:\"type,omitempty\""
 				}{
@@ -242,56 +250,72 @@ func toolsToTools(tools []llms.Tool) []anthropicclient.Tool {
 	return toolReq
 }
 
-func processMessages(messages []llms.MessageContent) ([]anthropicclient.ChatMessage, string, error) {
+func processMessages(messages []llms.MessageContent) ([]anthropicclient.ChatMessage, []anthropicclient.TextContent, error) {
 	chatMessages := make([]anthropicclient.ChatMessage, 0, len(messages))
-	systemPrompt := ""
+	systemPrompt := make([]anthropicclient.TextContent, 0)
 	for _, msg := range messages {
 		switch msg.Role {
 		case llms.ChatMessageTypeSystem:
 			content, err := handleSystemMessage(msg)
 			if err != nil {
-				return nil, "", fmt.Errorf("anthropic: failed to handle system message: %w", err)
+				return nil, nil, fmt.Errorf("anthropic: failed to handle system message: %w", err)
 			}
-			systemPrompt += content
+			systemPrompt = append(systemPrompt, content)
 		case llms.ChatMessageTypeHuman:
 			chatMessage, err := handleHumanMessage(msg)
 			if err != nil {
-				return nil, "", fmt.Errorf("anthropic: failed to handle human message: %w", err)
+				return nil, nil, fmt.Errorf("anthropic: failed to handle human message: %w", err)
 			}
 			chatMessages = append(chatMessages, chatMessage)
 		case llms.ChatMessageTypeAI:
 			chatMessage, err := handleAIMessage(msg)
 			if err != nil {
-				return nil, "", fmt.Errorf("anthropic: failed to handle AI message: %w", err)
+				return nil, nil, fmt.Errorf("anthropic: failed to handle AI message: %w", err)
 			}
 			chatMessages = append(chatMessages, chatMessage)
 		case llms.ChatMessageTypeTool:
 			chatMessage, err := handleToolMessage(msg)
 			if err != nil {
-				return nil, "", fmt.Errorf("anthropic: failed to handle tool message: %w", err)
+				return nil, nil, fmt.Errorf("anthropic: failed to handle tool message: %w", err)
 			}
 			chatMessages = append(chatMessages, chatMessage)
 		case llms.ChatMessageTypeGeneric, llms.ChatMessageTypeFunction:
-			return nil, "", fmt.Errorf("anthropic: %w: %v", ErrUnsupportedMessageType, msg.Role)
+			return nil, nil, fmt.Errorf("anthropic: %w: %v", ErrUnsupportedMessageType, msg.Role)
 		default:
-			return nil, "", fmt.Errorf("anthropic: %w: %v", ErrUnsupportedMessageType, msg.Role)
+			return nil, nil, fmt.Errorf("anthropic: %w: %v", ErrUnsupportedMessageType, msg.Role)
 		}
 	}
 	return chatMessages, systemPrompt, nil
 }
 
-func handleSystemMessage(msg llms.MessageContent) (string, error) {
+func handleSystemMessage(msg llms.MessageContent) (anthropicclient.TextContent, error) {
 	if textContent, ok := msg.Parts[0].(llms.TextContent); ok {
-		return textContent.Text, nil
+		cacheControl, err := getCacheControl(textContent)
+		if err != nil {
+			return anthropicclient.TextContent{}, fmt.Errorf("anthropic: failed to get cache control: %w", err)
+		}
+		return anthropicclient.TextContent{
+			Type:         "text",
+			Text:         textContent.Text,
+			CacheControl: cacheControl,
+		}, nil
 	}
-	return "", fmt.Errorf("anthropic: %w for system message", ErrInvalidContentType)
+	return anthropicclient.TextContent{}, fmt.Errorf("anthropic: %w for system message", ErrInvalidContentType)
 }
 
 func handleHumanMessage(msg llms.MessageContent) (anthropicclient.ChatMessage, error) {
 	if textContent, ok := msg.Parts[0].(llms.TextContent); ok {
+		cacheControl, err := getCacheControl(textContent)
+		if err != nil {
+			return anthropicclient.ChatMessage{}, fmt.Errorf("anthropic: failed to get cache control: %w", err)
+		}
 		return anthropicclient.ChatMessage{
-			Role:    RoleUser,
-			Content: textContent.Text,
+			Role: RoleUser,
+			Content: []anthropicclient.Content{&anthropicclient.TextContent{
+				Type:         "text",
+				Text:         textContent.Text,
+				CacheControl: cacheControl,
+			}},
 		}, nil
 	}
 	return anthropicclient.ChatMessage{}, fmt.Errorf("anthropic: %w for human message", ErrInvalidContentType)
@@ -299,16 +323,21 @@ func handleHumanMessage(msg llms.MessageContent) (anthropicclient.ChatMessage, e
 
 func handleAIMessage(msg llms.MessageContent) (anthropicclient.ChatMessage, error) {
 	if toolCall, ok := msg.Parts[0].(llms.ToolCall); ok {
+		cacheControl, err := getCacheControl(toolCall)
+		if err != nil {
+			return anthropicclient.ChatMessage{}, fmt.Errorf("anthropic: failed to get cache control: %w", err)
+		}
 		var inputStruct map[string]interface{}
-		err := json.Unmarshal([]byte(toolCall.FunctionCall.Arguments), &inputStruct)
+		err = json.Unmarshal([]byte(toolCall.FunctionCall.Arguments), &inputStruct)
 		if err != nil {
 			return anthropicclient.ChatMessage{}, fmt.Errorf("anthropic: failed to unmarshal tool call arguments: %w", err)
 		}
 		toolUse := anthropicclient.ToolUseContent{
-			Type:  "tool_use",
-			ID:    toolCall.ID,
-			Name:  toolCall.FunctionCall.Name,
-			Input: inputStruct,
+			Type:         "tool_use",
+			ID:           toolCall.ID,
+			Name:         toolCall.FunctionCall.Name,
+			Input:        inputStruct,
+			CacheControl: cacheControl,
 		}
 
 		return anthropicclient.ChatMessage{
@@ -317,11 +346,16 @@ func handleAIMessage(msg llms.MessageContent) (anthropicclient.ChatMessage, erro
 		}, nil
 	}
 	if textContent, ok := msg.Parts[0].(llms.TextContent); ok {
+		cacheControl, err := getCacheControl(textContent)
+		if err != nil {
+			return anthropicclient.ChatMessage{}, fmt.Errorf("anthropic: failed to get cache control: %w", err)
+		}
 		return anthropicclient.ChatMessage{
 			Role: RoleAssistant,
 			Content: []anthropicclient.Content{&anthropicclient.TextContent{
-				Type: "text",
-				Text: textContent.Text,
+				Type:         "text",
+				Text:         textContent.Text,
+				CacheControl: cacheControl,
 			}},
 		}, nil
 	}
@@ -336,10 +370,15 @@ type ToolResult struct {
 
 func handleToolMessage(msg llms.MessageContent) (anthropicclient.ChatMessage, error) {
 	if toolCallResponse, ok := msg.Parts[0].(llms.ToolCallResponse); ok {
+		cacheControl, err := getCacheControl(toolCallResponse)
+		if err != nil {
+			return anthropicclient.ChatMessage{}, fmt.Errorf("anthropic: failed to get cache control: %w", err)
+		}
 		toolContent := anthropicclient.ToolResultContent{
-			Type:      "tool_result",
-			ToolUseID: toolCallResponse.ToolCallID,
-			Content:   toolCallResponse.Content,
+			Type:         "tool_result",
+			ToolUseID:    toolCallResponse.ToolCallID,
+			Content:      toolCallResponse.Content,
+			CacheControl: cacheControl,
 		}
 
 		if toolCallResponse.MultiContent != nil {
@@ -352,4 +391,12 @@ func handleToolMessage(msg llms.MessageContent) (anthropicclient.ChatMessage, er
 		}, nil
 	}
 	return anthropicclient.ChatMessage{}, fmt.Errorf("anthropic: %w for tool message", ErrInvalidContentType)
+}
+
+func getCacheControl(part llms.ContentPart) (map[string]string, error) {
+	md := part.GetProviderMetadata()
+	if md == nil {
+		return nil, nil
+	}
+	return md["cache_control"].(map[string]string), nil
 }

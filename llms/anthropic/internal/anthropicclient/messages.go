@@ -30,13 +30,13 @@ var (
 
 type ChatMessage struct {
 	Role    string `json:"role"`
-	Content any    `json:"content"`
+	Content any    `json:"content"` // []Content or string
 }
 
 type messagePayload struct {
 	Model       string        `json:"model"`
 	Messages    []ChatMessage `json:"messages"`
-	System      string        `json:"system,omitempty"`
+	System      any           `json:"system,omitempty"` // string or []TextContent
 	MaxTokens   int           `json:"max_tokens,omitempty"`
 	StopWords   []string      `json:"stop_sequences,omitempty"`
 	Stream      bool          `json:"stream,omitempty"`
@@ -64,14 +64,15 @@ type Tool struct {
 	} `json:"cache_control,omitempty"`
 }
 
-// Content can be TextContent or ToolUseContent depending on the type.
+// Content can be TextContent, ToolUseContent, or ToolResultContent depending on the type.
 type Content interface {
 	GetType() string
 }
 
 type TextContent struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+	Type         string            `json:"type"`
+	Text         string            `json:"text"`
+	CacheControl map[string]string `json:"cache_control,omitempty"`
 }
 
 func (tc TextContent) GetType() string {
@@ -79,10 +80,11 @@ func (tc TextContent) GetType() string {
 }
 
 type ToolUseContent struct {
-	Type  string                 `json:"type"`
-	ID    string                 `json:"id"`
-	Name  string                 `json:"name"`
-	Input map[string]interface{} `json:"input"`
+	Type         string                 `json:"type"`
+	ID           string                 `json:"id"`
+	Name         string                 `json:"name"`
+	Input        map[string]interface{} `json:"input"`
+	CacheControl map[string]string      `json:"cache_control,omitempty"`
 }
 
 func (tuc ToolUseContent) GetType() string {
@@ -98,6 +100,7 @@ type ToolResultContent struct {
 	Content string `json:"-"`
 
 	MultiContent []llms.ToolResultContentPart `json:"-"`
+	CacheControl map[string]string            `json:"cache_control,omitempty"`
 }
 
 // json marshal ToolResultContent such that either Content or MultiContent is set, but not both.
@@ -147,8 +150,10 @@ type MessageResponsePayload struct {
 	StopSequence string    `json:"stop_sequence"`
 	Type         string    `json:"type"`
 	Usage        struct {
-		InputTokens  int `json:"input_tokens"`
-		OutputTokens int `json:"output_tokens"`
+		InputTokens              int `json:"input_tokens"`
+		OutputTokens             int `json:"output_tokens"`
+		CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+		CacheReadInputTokens     int `json:"cache_read_input_tokens"`
 	} `json:"usage"`
 }
 
@@ -348,6 +353,7 @@ func handleMessageStartEvent(event map[string]interface{}, response MessageRespo
 	response.Role = getString(message, "role")
 	response.Type = getString(message, "type")
 	response.Usage.InputTokens = int(inputTokens)
+	// TODO: handle cached token usage
 
 	return response, nil
 }

@@ -126,7 +126,7 @@ func (c *Client) CreateCompletion(ctx context.Context, r *CompletionRequest) (*C
 type MessageRequest struct {
 	Model       string        `json:"model"`
 	Messages    []ChatMessage `json:"messages"`
-	System      string        `json:"system,omitempty"`
+	System      any           `json:"system,omitempty"` // string or []TextContent
 	Temperature float64       `json:"temperature"`
 	MaxTokens   int           `json:"max_tokens,omitempty"`
 	TopP        float64       `json:"top_p,omitempty"`
